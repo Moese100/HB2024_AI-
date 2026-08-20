@@ -5,7 +5,11 @@
 # 本地旧库压缩包仅作个人临时备份；正式历史归档见 legacy-pre-repair 分支
 *.zip
 
-# 本地同步/核验日志不参与版本管理
+# 本地同步/核验日志、旧版临时备份及迁移标记不参与版本管理
 HB2024_AI数据库同步核验_*.txt
 HB2024_AI数据库更新日志_*.txt
+HB2024_DB_SYNC_VERIFY_*.txt
+HB2024_DB_ROOT_MIGRATION_*.txt
+HB2024_Base_JSON_DB_Windows_旧版临时备份/
+HB2024_Base_JSON_DB_Windows_Migrated_*/
 .HB2024_AI旧JSON本地备份/
