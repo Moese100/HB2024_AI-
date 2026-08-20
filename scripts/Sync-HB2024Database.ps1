@@ -1,15 +1,16 @@
 #requires -Version 5.1
 <#!
 .SYNOPSIS
-将本仓库的HB2024定额JSON修复版本安全同步到Windows本地旧库。
+将本仓库的HB2024修复版JSON库安全同步为Windows本机唯一正式库。
 .DESCRIPTION
-脚本不删除本地任何文件。每次更新前，先把将被更新的目录备份到
-目标根目录\.HB2024_AI更新备份\时间戳\，再从仓库的 Database 目录覆盖更新。
-首次运行会要求确认目标根目录；以后可直接双击“scripts\一键同步到本地.bat”。
+仅处理下列六个已确认的目录：安装2024JSON、房建装饰2024JSON、公共专业2024JSON、
+湖北2024定额库_统一索引、市政2024JSON、园林绿化2024JSON。
+同步前先备份旧JSON；仅删除这六个目录内旧的 .json、.jsonl、.py 文件，绝不删除PDF、
+规则库、GBQ样表、待处理清单及02—06目录中的任何内容。
 #>
 [CmdletBinding()]
 param(
-    [string]$TargetRoot = 'D:\desktop\Codex共享文件夹\HB2024_AI套项数据库',
+    [string]$TargetRoot = 'D:\desktop\Codex共享文件夹\HB2024_AI套项数据库\01_基础定额库\HB2024_Base_JSON_DB_Windows',
     [switch]$SkipConfirm
 )
 
@@ -17,91 +18,94 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $SourceRoot = Join-Path $RepoRoot 'Database'
 $TimeTag = Get-Date -Format 'yyyyMMdd_HHmmss'
+$OfficialFolders = @(
+    '安装2024JSON',
+    '房建装饰2024JSON',
+    '公共专业2024JSON',
+    '湖北2024定额库_统一索引',
+    '市政2024JSON',
+    '园林绿化2024JSON'
+)
 
 function Assert-RobocopyResult {
     param([int]$ExitCode, [string]$Operation)
-    # Robocopy: 0-7 are successful outcomes (including copied files / minor extras).
     if ($ExitCode -gt 7) { throw "$Operation 失败。Robocopy退出代码：$ExitCode" }
 }
 
-function Find-ExistingFolder {
-    param([string]$Root, [string]$FolderName)
-    $direct = Join-Path $Root $FolderName
-    if (Test-Path -LiteralPath $direct -PathType Container) { return $direct }
-    $found = Get-ChildItem -LiteralPath $Root -Directory -Recurse -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -eq $FolderName } | Select-Object -First 1
-    if ($null -ne $found) { return $found.FullName }
-    return $direct
+function Get-DatabaseFiles {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return @() }
+    return @(Get-ChildItem -LiteralPath $Path -Recurse -File -ErrorAction Stop |
+        Where-Object { $_.Extension -in @('.json', '.jsonl', '.py') })
 }
 
 if (-not (Test-Path -LiteralPath $SourceRoot -PathType Container)) {
-    throw "未找到仓库更新目录：$SourceRoot。请确认脚本位于完整数据库仓库的 scripts 文件夹中。"
+    throw "未找到仓库正式数据库目录：$SourceRoot"
 }
-
 if (-not (Test-Path -LiteralPath $TargetRoot -PathType Container)) {
-    $inputPath = Read-Host "未找到默认本地目录。请输入HB2024_AI套项数据库的完整路径"
-    if ([string]::IsNullOrWhiteSpace($inputPath) -or -not (Test-Path -LiteralPath $inputPath -PathType Container)) {
-        throw '目标目录不存在，已取消更新。'
-    }
-    $TargetRoot = $inputPath
+    throw "未找到已确认的正式库目录：$TargetRoot。请勿自行选择其他目录。"
 }
 
-$logPath = Join-Path $TargetRoot "HB2024_AI数据库更新日志_$TimeTag.txt"
+$sourceMissing = $OfficialFolders | Where-Object { -not (Test-Path -LiteralPath (Join-Path $SourceRoot $_) -PathType Container) }
+if ($sourceMissing) { throw "仓库缺少正式库目录：$($sourceMissing -join '、')" }
+
+$logPath = Join-Path (Split-Path -Parent $TargetRoot) "HB2024_AI数据库更新日志_$TimeTag.txt"
 Start-Transcript -Path $logPath -Append | Out-Null
 try {
     Write-Host '----------------------------------------' -ForegroundColor Cyan
-    Write-Host 'HB2024 AI定额数据库：安全更新工具' -ForegroundColor Cyan
-    Write-Host "本地数据库根目录：$TargetRoot"
-    Write-Host "仓库更新目录：$SourceRoot"
-    Write-Host '规则：先备份、后更新；不删除本地已有文件。' -ForegroundColor Yellow
-
-    $folders = Get-ChildItem -LiteralPath $SourceRoot -Directory | Sort-Object Name
-    if ($folders.Count -eq 0) { throw "更新目录中未发现数据库文件夹：$SourceRoot" }
+    Write-Host 'HB2024 AI定额数据库：正式库安全替换工具' -ForegroundColor Cyan
+    Write-Host "正式库目录：$TargetRoot"
+    Write-Host '仅更新六个JSON目录；PDF、规则库、GBQ文件和02—06目录不会被触碰。' -ForegroundColor Yellow
 
     $plans = @()
-    foreach ($folder in $folders) {
-        $destination = Find-ExistingFolder -Root $TargetRoot -FolderName $folder.Name
-        $exists = Test-Path -LiteralPath $destination -PathType Container
-        $plans += [PSCustomObject]@{ Name=$folder.Name; Source=$folder.FullName; Destination=$destination; Exists=$exists }
+    foreach ($name in $OfficialFolders) {
+        $source = Join-Path $SourceRoot $name
+        $target = Join-Path $TargetRoot $name
+        $oldFiles = Get-DatabaseFiles -Path $target
+        $newFiles = Get-DatabaseFiles -Path $source
+        $plans += [PSCustomObject]@{Name=$name; Source=$source; Target=$target; OldCount=$oldFiles.Count; NewCount=$newFiles.Count}
     }
 
-    Write-Host "`n本次将同步以下数据库目录：" -ForegroundColor Green
-    $plans | ForEach-Object {
-        $state = if ($_.Exists) { '更新原有目录' } else { '创建新目录' }
-        Write-Host " - $($_.Name)：$state"
-    }
+    Write-Host "`n本次正式替换范围：" -ForegroundColor Green
+    $plans | ForEach-Object { Write-Host " - $($_.Name)：备份并替换旧JSON $($_.OldCount) 个，写入修复版文件 $($_.NewCount) 个" }
+    Write-Host '不会删除任何PDF、ZIP、README、CSV或其他非JSON文件。' -ForegroundColor Green
 
     if (-not $SkipConfirm) {
-        $answer = Read-Host "`n确认执行备份和同步？输入 Y 后继续，其他输入取消"
+        $answer = Read-Host "`n确认执行备份并替换六个正式JSON目录？输入 Y 后继续，其他输入取消"
         if ($answer -notmatch '^[Yy]$') { Write-Host '已取消，未修改任何文件。'; return }
     }
 
-    $backupRoot = Join-Path $TargetRoot ".HB2024_AI更新备份\$TimeTag"
+    $backupRoot = Join-Path (Split-Path -Parent $TargetRoot) ".HB2024_AI旧JSON本地备份\$TimeTag"
     foreach ($plan in $plans) {
-        if ($plan.Exists) {
+        if (Test-Path -LiteralPath $plan.Target -PathType Container) {
             $backupDir = Join-Path $backupRoot $plan.Name
             New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
-            Write-Host "正在备份：$($plan.Name)"
-            & robocopy $plan.Destination $backupDir /E /COPY:DAT /R:1 /W:1 /NFL /NDL /NJH /NJS | Out-Null
-            Assert-RobocopyResult -ExitCode $LASTEXITCODE -Operation "备份 $($plan.Name)"
+            Write-Host "正在备份旧JSON：$($plan.Name)"
+            # 仅复制JSON类文件至备份，原目录的PDF及其他资料完全不动。
+            Get-DatabaseFiles -Path $plan.Target | ForEach-Object {
+                $relative = $_.FullName.Substring($plan.Target.Length).TrimStart('\')
+                $dest = Join-Path $backupDir $relative
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+                Copy-Item -LiteralPath $_.FullName -Destination $dest -Force
+            }
         }
     }
 
     foreach ($plan in $plans) {
-        New-Item -ItemType Directory -Force -Path $plan.Destination | Out-Null
-        Write-Host "正在更新：$($plan.Name)"
-        # /E: 包含子目录；不使用 /MIR，保证不删除用户本地文件。
-        # /IS: 同尺寸同日期时仍复制，确保仓库版本完整写入目标目录。
-        & robocopy $plan.Source $plan.Destination /E /COPY:DAT /IS /R:2 /W:1 /NFL /NDL /NJH /NJS | Out-Null
+        New-Item -ItemType Directory -Force -Path $plan.Target | Out-Null
+        Write-Host "正在移除旧JSON并写入修复版：$($plan.Name)"
+        Get-DatabaseFiles -Path $plan.Target | Remove-Item -Force
+        & robocopy $plan.Source $plan.Target /E /COPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS | Out-Null
         Assert-RobocopyResult -ExitCode $LASTEXITCODE -Operation "更新 $($plan.Name)"
     }
 
     $manifest = Join-Path $SourceRoot 'HB2024_数据库清单.json'
     if (Test-Path -LiteralPath $manifest) {
-        Copy-Item -LiteralPath $manifest -Destination (Join-Path $TargetRoot 'HB2024_数据库清单_最近同步.json') -Force
+        Copy-Item -LiteralPath $manifest -Destination (Join-Path $TargetRoot 'HB2024_数据库清单_正式库.json') -Force
     }
 
-    Write-Host "`n同步完成。备份位置：$backupRoot" -ForegroundColor Green
+    Write-Host "`n正式库更新完成。" -ForegroundColor Green
+    Write-Host "本次旧JSON备份：$backupRoot" -ForegroundColor Green
     Write-Host "更新日志：$logPath" -ForegroundColor Green
 }
 finally {
